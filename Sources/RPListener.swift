@@ -104,7 +104,9 @@ open class RPListener: NSObject, XCTestObservation {
         
         queue.async {
             do {
-                try reportingService.startLaunch()
+                if reportingService.launchID == nil { // ✅ Guard against duplicate launches
+                    try reportingService.startLaunch()
+                }
             } catch {
                 print("🚨 RPListener Launch Start Error: \(error.localizedDescription)")
             }
@@ -124,8 +126,10 @@ open class RPListener: NSObject, XCTestObservation {
         
         queue.async {
             do {
-                // Ensure launch is started before starting suites (idempotent)
-                try reportingService.startLaunch()
+                // ✅ Ensure launch is started before starting suites (idempotent)
+                if reportingService.launchID == nil {
+                    try reportingService.startLaunch()
+                }
                 if testSuite.name.contains(".xctest") {
                     try reportingService.startRootSuite(testSuite)
                 } else {
@@ -152,7 +156,9 @@ open class RPListener: NSObject, XCTestObservation {
             self.reportingService = service
 
             do {
-                try service.startLaunch() // sync launch start
+                if service.launchID == nil { // ✅ Guard
+                    try service.startLaunch()
+                }
             } catch {
                 print("🚨 RPListener: Failed to start launch for \(testCase.name) — \(error.localizedDescription)")
             }
@@ -182,17 +188,7 @@ open class RPListener: NSObject, XCTestObservation {
     }
 
     // MARK: - Gherkin Suite Initialization Helper
-    /// XCTest-Gherkin compatibility note:
-    /// Normally, root/test suites are initialized in testSuiteWillStart.
-    /// However, XCTest-Gherkin dynamically generates suites for scenarios with names
-    /// like "All tests" or "Selected tests", which RPListener ignores.
-    /// As a result, startRootSuite()/startTestSuite() is never called,
-    /// leaving rootSuiteID/testSuiteID unset and causing startTest() to fail.
-    ///
-    /// This helper manually initializes suites if IDs are missing, ensuring
-    /// proper ReportPortal hierarchy for Gherkin scenarios.
     private func ensureGherkinSuitesInitialized(for testCase: XCTestCase) {
-        // Only apply this workaround when XCTest-Gherkin is present
         guard NSClassFromString("NativeTestCase") != nil || NSClassFromString("XCGNativeInitializer") != nil else { return }
         guard let reportingService = reportingService,
                 reportingService.rootSuiteID == nil || reportingService.testSuiteID == nil else { return }
@@ -210,7 +206,6 @@ open class RPListener: NSObject, XCTestObservation {
     }
     
 #if os(macOS)
-    // macOS API
     public func testCase(_ testCase: XCTestCase, didRecord issue: XCTIssueReference) {
         let lineNumberString = (issue.sourceCodeContext.location?.lineNumber)
             .map { " on line \($0)" } ?? ""
@@ -218,7 +213,6 @@ open class RPListener: NSObject, XCTestObservation {
         reportFailure(testCase: testCase, message: errorMessage)
     }
 #else
-    // API for iOS, iPadOS, tvOS, visionOS, watchOS
     public func testCase(_ testCase: XCTestCase, didRecord issue: XCTIssue) {
         let lineNumberString = (issue.sourceCodeContext.location?.lineNumber)
             .map { " on line \($0)" } ?? ""
@@ -227,7 +221,6 @@ open class RPListener: NSObject, XCTestObservation {
     }
 #endif
 
-    // Legacy API (very old XCTest)
     public func testCase(_ testCase: XCTestCase,
                          didFailWithDescription description: String,
                          inFile filePath: String?,
@@ -237,7 +230,6 @@ open class RPListener: NSObject, XCTestObservation {
         reportFailure(testCase: testCase, message: errorMessage)
     }
 
-    // MARK: - Private helper
     private func reportFailure(testCase: XCTestCase, message: String) {
         guard let reportingService = reportingService else { return }
         
@@ -285,7 +277,6 @@ open class RPListener: NSObject, XCTestObservation {
 
     // MARK: - Gherkin Detection & Name Extraction
     private func extractGherkinNames(from testCase: XCTestCase) -> (feature: String?, scenario: String?) {
-        // Safety check: If neither NativeTestCase nor XCGNativeInitializer exists, skip
         guard NSClassFromString("NativeTestCase") != nil || NSClassFromString("XCGNativeInitializer") != nil else {
             return (nil, nil)
         }
@@ -298,7 +289,7 @@ open class RPListener: NSObject, XCTestObservation {
             let featureScenarioDataSelector = NSSelectorFromString("featureScenarioData:")
 
             if (nativeTestCaseClass as AnyObject).responds(to: featureScenarioDataSelector),
-                let unmanagedResult = (nativeTestCaseClass as AnyObject).perform(featureScenarioDataSelector, with: selector as Any) {
+               let unmanagedResult = (nativeTestCaseClass as AnyObject).perform(featureScenarioDataSelector, with: selector as Any) {
                 let tupleAny = unmanagedResult.takeUnretainedValue()
                 if let tuple = tupleAny as? (Any, Any) {
                     let featureName = (tuple.0 as? NSObject)?.value(forKey: "name") as? String
